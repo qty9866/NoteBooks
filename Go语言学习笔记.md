@@ -14914,4 +14914,302 @@ Please specify a program using absolute path or make sure the program is availab
 
   ​		当我们需要一个镜像的时候，通常会需要编译环境，配置等，最终编译出我们需要的应用。而应用运行时并不需要编译环境。多步骤编译镜像会大大缩小最终产出的容器镜像的规模。
 
-  ​		 
+
+## 35.go连接Kubernetes
+
+k8s.io/client-go 是 Kubernetes 官方提供的 Go 语言客户端库，用于与 Kubernetes 集群进行交互，执行各种操作，如创建、删除、更新资源等。
+
+### 1. Cient-go是什么？
+Client-go是Kubernetes官方提供的Go语言客户端库，旨在帮助开发者与Kubernetes API交互。它封装了与Kubernetes API服务器通信的底层细节，使开发者能够更加关注业务逻辑的实现，而不用过多关注通信细节。
+
+### 2. Client-go有哪些主要组件？
+
+- #### rest
+
+	rest组件提供与Kubernetes API服务器的HTTP通信。它封装了发送HTTP请求和处理HTTP响应的逻辑，使客户端能够方便地与API服务器进行交互,示例代码：
+	```go
+	import (
+    	"k8s.io/client-go/rest"
+	)
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+    	panic(err.Error())
+	}
+	```
+
+- #### core
+
+	core组件提供了Kubernetes API的核心功能，包括Pod、Service、Deployment等资源的增、删、改、查操作。通过core组件，开发者可以方便地对这些资源进行管理。 示例代码：
+	```go
+	import (
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/tools/clientcmd"
+	)
+
+	// 使用kubeconfig创建clientset
+	config, err := clientcmd.BuildConfigFromFlags("", "kubeconfig")
+	if err != nil {
+    panic(err.Error())
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+    	panic(err.Error())
+	}
+
+	// 创建一个Pod
+	pod := &corev1.Pod{
+    // ...
+	}
+	result, err := clientset.CoreV1().Pods("namespace").Create(context.TODO(), pod, metav1.CreateOptions{})
+	if err != nil {
+    	panic(err.Error())
+	}
+	
+	```
+
+- #### dynamic
+
+	dynamic动态组件提供了对Kubernetes API的动态访问能力，可以与任意Kubernetes API资源进行交互，而无需在客户端进行硬编码。 示例代码
+
+	```go
+		import (
+		"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+		"k8s.io/client-go/dynamic"
+		"k8s.io/client-go/tools/clientcmd"
+	)
+
+	// 使用kubeconfig创建dynamic client
+	config, err := clientcmd.BuildConfigFromFlags("", "kubeconfig")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	client, err := dynamic.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// 获取一个Pod资源
+	pod, err := client.Resource(schema.GroupVersionResource{
+		Group:    "v1",
+		Version:  "Pod",
+		Resource: "pods",
+	}).Namespace("default").Get(context.TODO(), "pod-name", metav1.GetOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
+	```
+
+- #### discovery
+
+	discovery组件提供了对Kubernetes API资源的自动发现能力，可以动态获取API资源的信息，比如资源类型、版本号等。通过discovery组件，开发者可以避免手动维护API资源的信息。 示例代码：
+
+	```go
+	import (
+    "k8s.io/client-go/discovery"
+    "k8s.io/client-go/tools/clientcmd"
+	)
+
+	// 使用kubeconfig创建discovery client
+	config, err := clientcmd.BuildConfigFromFlags("", "kubeconfig")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// 获取集群中支持的API资源列表
+	apiResources, err := discoveryClient.ServerPreferredResources()
+	if err != nil {
+		panic(err.Error())
+	}
+	```
+- #### informers
+
+	informers组件为客户端提供了对集群资源的高效缓存与本地持久化存储能力，以提供快速访问和监听资源变化的能力。 示例代码：
+
+	```go
+	import (
+    "fmt"
+
+    "k8s.io/client-go/informers"
+    "k8s.io/client-go/tools/clientcmd"
+	)
+
+	// 使用kubeconfig创建informers工厂
+	config, err := clientcmd.BuildConfigFromFlags("", "kubeconfig")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	informersFactory := informers.NewSharedInformerFactory(config, 0)
+
+	// 创建Pod informer
+	podInformer := informersFactory.Core().V1().Pods().Informer()
+
+	// 注册资源变化的回调函数
+	podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			pod := obj.(*corev1.Pod)
+			fmt.Printf("New Pod added: %s\n", pod.Name)
+		},
+		DeleteFunc: func(obj interface{}) {
+			pod := obj.(*corev1.Pod)
+			fmt.Printf("Pod deleted: %s\n", pod.Name)
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			oldPod := oldObj.(*corev1.Pod)
+			newPod := newObj.(*corev1.Pod)
+			fmt.Printf("Pod updated: %s -> %s\n", oldPod.Name, newPod.Name)
+		},
+	})
+
+	// 启动informers
+	informersFactory.Start(nil)
+	informersFactory.WaitForCacheSync(nil)
+
+	// 获取缓存中的所有Pod
+	pods, err := podInformer.GetStore().List()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	for _, obj := range pods {
+		pod := obj.(*corev1.Pod)
+		fmt.Printf("Pod: %s\n", pod.Name)
+	}
+	```
+
+- #### scale
+	
+	scale组件提供了对Deployment、ReplicaSet、StatefulSet等控制器资源的扩缩容操作。开发者可以通过scale组件方便地调整控制器的副本数量。 示例代码：
+	```go
+	import (
+    "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/tools/clientcmd"
+	)
+
+	// 使用kubeconfig创建clientset
+	config, err := clientcmd.BuildConfigFromFlags("", "kubeconfig")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// 扩容Deployment
+	scale, err := clientset.AppsV1().Deployments("namespace").
+		GetScale(context.TODO(), "deployment-name", v1.GetOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
+
+	scale.Spec.Replicas = 3
+
+	_, err = clientset.AppsV1().Deployments("namespace").
+		UpdateScale(context.TODO(), "deployment-name", scale)
+	if err != nil {
+		panic(err.Error())
+	}
+	```
+
+### 3. Client-go可以实现什么功能?
+1. 封装复杂的HTTP通信细节：client-go的rest组件封装了与Kubernetes API服务器的HTTP通信，使开发者无需关心底层的请求发送和响应处理细节，仅需通过简单的API调用即可完成通信操作。
+
+2. 提供丰富的资源操作能力：通过core组件，开发者可以对核心的Kubernetes资源（如Pod、Service、Deployment等）进行增、删、改、查等操作，满足了常见的资源管理需求。
+
+3. 支持动态访问任意资源：dynamic组件使得开发者可以与任意Kubernetes API资源进行交互，而无需事先在客户端进行硬编码。这种动态的操作方式为开发者提供了更高的灵活性和扩展性。
+
+4. 实现API资源的自动发现：通过discovery组件，开发者可以动态获取Kubernetes集群中支持的API资源列表，避免了手动维护资源信息的繁琐工作。
+
+5. 提供高效的资源缓存与本地持久化能力：informers组件利用缓存和本地持久化机制，可以快速访问集群资源，并实时监听资源变化，为开发者提供了高效的资源操作方式。
+
+6. 支持控制器资源的扩缩容操作：通过scale组件，开发者可以方便地调整Deployment、ReplicaSet等控制器资源的副本数量，实现扩缩容的功能。
+
+### 4. Client-go如何使用?
+
+使用client-go进行Kubernetes API的操作可以按照以下步骤进行：
+
+1.安装client-go库：通过go get命令安装client-go库。
+```bash
+go get k8s.io/client-go
+```
+2. 导入必要的包：在代码中导入需要使用的client-go包。
+
+```go
+import (
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/tools/clientcmd"
+)
+```
+3. 创建Clientset：根据你的Kubernetes集群环境，创建相应的clientset对象。
+
+```go
+// 使用kubeconfig创建clientset
+config, err := clientcmd.BuildConfigFromFlags("", "kubeconfig")
+if err != nil {
+    panic(err.Error())
+}
+
+clientset, err := kubernetes.NewForConfig(config)
+if err != nil {
+    panic(err.Error())
+}
+```
+注意：如果你在集群内部运行代码，可以直接使用InClusterConfig()函数创建config对象，无需指定kubeconfig文件路径。
+
+```go
+config, err := rest.InClusterConfig()
+if err != nil {
+    panic(err.Error())
+}
+```
+4. 使用clientset进行API操作：通过clientset对象，可以对Kubernetes API进行各种操作，如创建、删除、更新、查询等。
+
+```go
+// 创建一个Pod
+pod := &corev1.Pod{
+    // ...
+}
+result, err := clientset.CoreV1().Pods("namespace").Create(context.TODO(), pod, metav1.CreateOptions{})
+if err != nil {
+    panic(err.Error())
+}
+
+// 删除一个Pod
+err = clientset.CoreV1().Pods("namespace").Delete(context.TODO(), "pod-name", metav1.DeleteOptions{})
+if err != nil {
+    panic(err.Error())
+}
+
+// 更新一个Pod
+pod, err := clientset.CoreV1().Pods("namespace").Get(context.TODO(), "pod-name", metav1.GetOptions{})
+if err != nil {
+    panic(err.Error())
+}
+
+pod.Labels["version"] = "v2"
+_, err = clientset.CoreV1().Pods("namespace").Update(context.TODO(), pod, metav1.UpdateOptions{})
+if err != nil {
+    panic(err.Error())
+}
+
+// 查询所有Pods
+pods, err := clientset.CoreV1().Pods("namespace").List(context.TODO(), metav1.ListOptions{})
+if err != nil {
+    panic(err.Error())
+}
+
+for _, pod := range pods.Items {
+    // 处理每个Pod对象
+}
+```
